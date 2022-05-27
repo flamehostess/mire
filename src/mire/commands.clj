@@ -32,15 +32,15 @@
                       (disj @(:inhabitants @player/*current-room*) player/*name*))) 
           "\n"))
        (str/join (map #(str "There is " % " here.\n")
-                        @(:items @player/*current-room*)))
+                       @(:items @player/*current-room*)))
        (if (nil? (:chest @player/*current-room*)) ""
-          (case @(first (:chest @player/*current-room*))
-            :closed "There is a closed chest here.\n"
-            :open "There is an empty chest here.\n"))
-          (if (empty? (:notes @player/*current-room*)) ""
-            (if (= (count (:notes @player/*current-room*)) 1)
-              "There is a note lying on the floor.\n"
-              "There are some notes lying on the floor.\n"))))
+        (case @(first (:chest @player/*current-room*))
+          :closed "There is a closed chest here.\n"
+          :open "There is an empty chest here.\n"))
+       (if (empty? (:notes @player/*current-room*)) ""
+         (if (= (count (:notes @player/*current-room*)) 1)
+           "There is a note lying on the floor.\n"
+           "There are some notes lying on the floor.\n"))))
 
 (defn move
   "\"♬ We gotta get out of this place... ♪\" Give a direction."
@@ -48,7 +48,7 @@
   (dosync
    (let [[target-name required-keys _] ((:exits @player/*current-room*) (keyword direction))
          target (@rooms/rooms target-name)]
-      (if (or target (= target-name -1))
+     (if (or target (= target-name -1))
        (if (empty? @required-keys)
         (if target
           (do
@@ -57,18 +57,32 @@
                               (:inhabitants target))
             (ref-set player/*current-room* target)
             (look))
-          (do
-            (doseq [inhabitant (disj (keys player/streams)
-                                player/*name*)]
-              (binding [*out* (player/streams inhabitant)]
-                (println player/*name* " has won!")
-                (print player/prompt) (flush)))
-            (ref-set rooms/game-over true)
-            "You won!"))
-
-
+          (if (nil? @rooms/game-over-time)
+            (do
+              (doseq [inhabitant (disj (into #{} (keys @player/streams))
+                                  player/*name*)]
+                (binding [*out* (player/streams inhabitant)]
+                  (println "Someone has exited the dungeon! You have 1 minute to find the exit, and you will win if you have more gold than them.")
+                  (print player/prompt) (flush)))
+              (ref-set rooms/game-over-time (+ (System/currentTimeMillis) 60000))
+              (ref-set rooms/current-winner player/*name*)
+              (ref-set rooms/winner-gold @player/*gold*)
+              (ref-set player/*exited* true)
+              (alter (:inhabitants @player/*current-room*) disj player/*name*)
+              "You exited! Now everyone has 1 minute to leave, and the person who makes it in time and has the most gold wins!")
+            (if (> @player/*gold* @rooms/winner-gold)
+              (do
+                (ref-set player/*exited* true)
+                (alter (:inhabitants @player/*current-room*) disj player/*name*)
+                (ref-set rooms/current-winner player/*name*)
+                (ref-set rooms/winner-gold @player/*gold*)
+                "You exited and you have more money than everyone else who did (for now...). Wait around to see who wins!")
+              (do
+                (ref-set player/*exited* true)
+                (alter (:inhabitants @player/*current-room*) disj player/*name*)
+                "You exited! Unfortunately, someone has more money than you, so you're not going to win... Wait around to see who does though!"))))
         (str "The door is closed. To open it you need the following keys: " (apply list @required-keys)))
-       "You can't go that way."))))
+      "You can't go that way."))))
 
 (defn grab
   "Pick something up."
@@ -98,8 +112,8 @@
   "See what you've got."
   []
   (str "You are carrying:\n"
-    (str/join "\n" (seq @player/*inventory*))
-    "\nYou also have " @player/*gold* " gold."))
+       (str/join "\n" (seq @player/*inventory*))
+       "\nYou also have " @player/*gold* " gold."))
 
 (defn detect
   "If you have the detector, you can see which room an item is in."
@@ -159,26 +173,26 @@
       (str "The notes contain following numbers: " 
         (:notes @player/*current-room*)))))
 
-        (defn chest
-          "Try to open the chest."
-          [code]
-          (dosync
-            (let [[status gold codes] (:chest @player/*current-room*)]
-                (cond 
-                 (nil? (:chest @player/*current-room*)) "There's no chest here."
-                 (= @status :open) "The chest is already opened."
+(defn chest
+  "Try to open the chest."
+  [code]
+  (dosync
+    (let [[status gold codes] (:chest @player/*current-room*)]
+        (cond 
+         (nil? (:chest @player/*current-room*)) "There's no chest here."
+         (= @status :open) "The chest is already opened."
         
-                 (not (some #{(str code)} codes)) 
-                 (str "The code didn't work. Maybe try another one?")
+         (not (some #{(str code)} codes)) 
+         (str "The code didn't work. Maybe try another one?")
         
-                 :else (do 
-                        (alter player/*gold* + gold)
-                        (ref-set status :open)
-                        (str "You opened the chest. There was " gold " gold there. You now have " @player/*gold* " gold."))))))
-        
-        (defn help
-          "Show available commands and what they do."
-          []
+         :else (do 
+                (alter player/*gold* + gold)
+                (ref-set status :open)
+                (str "You opened the chest. There was " gold " gold there. You now have " @player/*gold* " gold."))))))
+
+(defn help
+  "Show available commands and what they do."
+  []
   (str/join "\n" (map #(str (key %) ": " (:doc (meta (val %))))
                       (dissoc (ns-publics 'mire.commands)
                               'execute 'commands))))
@@ -209,8 +223,9 @@
 (defn execute
   "Execute a command that is passed to us."
   [input]
-  (try (let [[command & args] (.split input " +")]
-         (apply (commands command) args))
-       (catch Exception e
-         (.printStackTrace e (new java.io.PrintWriter *err*))
-         "You can't do that!")))
+  (if @player/*exited* "You already left the dungeon, you can't do that!"
+    (try (let [[command & args] (.split input " +")]
+          (apply (commands command) args))
+        (catch Exception e
+          (.printStackTrace e (new java.io.PrintWriter *err*))
+          "You can't do that!"))))
